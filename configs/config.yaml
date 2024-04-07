@@ -1,0 +1,16 @@
+rdb:
+  host: "redisdb"
+  port: "6379"
+  db: 0
+
+smtp:
+  host: "smtp.gmail.com"
+  port: "587"
+  email: "IvanMelnikovF@gmail.com"
+
+tokens:
+  accessTTL: 15m
+  emailTTL: 1h
+
+verification:
+  url: "localhost:8000/auth/verification"
