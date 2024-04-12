@@ -7,8 +7,10 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/IvanMeln1k/go-bank-app-bank/pkg/postgres"
 	"github.com/IvanMeln1k/go-bank-app-bank/pkg/redisdb"
 	"github.com/IvanMeln1k/go-bank-app-bank/pkg/tokens"
+	"github.com/IvanMeln1k/go-bank-app-worker/internal/repository"
 	"github.com/IvanMeln1k/go-bank-app-worker/internal/service"
 	"github.com/IvanMeln1k/go-bank-app-worker/internal/workers"
 	"github.com/IvanMeln1k/go-bank-app-worker/pkg/email"
@@ -24,6 +26,18 @@ func main() {
 
 	if err := godotenv.Load(); err != nil {
 		logrus.Fatalf("error loading env variables: %s", err)
+	}
+
+	db, err := postgres.NewPostgresDB(postgres.Config{
+		Host:     viper.GetString("db.host"),
+		Port:     viper.GetString("db.port"),
+		User:     viper.GetString("db.user"),
+		Password: os.Getenv("POSTGRES_PASS"),
+		DBName:   viper.GetString("db.name"),
+		SSLMode:  viper.GetString("db.sslmode"),
+	})
+	if err != nil {
+		logrus.Fatalf("error connecting to db: %s", err)
 	}
 
 	rdb := redisdb.NewRedisDB(redisdb.Config{
@@ -57,7 +71,12 @@ func main() {
 		EmailTTL:  emailTTL,
 	})
 
+	repos := repository.NewRepository(repository.Deps{
+		DB: db,
+	})
+
 	services := service.NewService(service.Deps{
+		Repos:           *repos,
 		EmailSender:     emailSender,
 		TokenManager:    tokenManager,
 		VerificationURL: viper.GetString("verification.url"),

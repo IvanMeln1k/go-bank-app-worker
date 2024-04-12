@@ -3,6 +3,13 @@ rdb:
   port: "6379"
   db: 0
 
+db:
+  host: "postgresdb"
+  port: "5432"
+  user: "postgres"
+  sslmode: "disable"
+  name: "postgres"
+
 smtp:
   host: "smtp.gmail.com"
   port: "587"
@@ -13,4 +20,4 @@ tokens:
   emailTTL: 1h
 
 verification:
-  url: "localhost:8000/auth/verification"
+  url: "http://localhost:8000/auth/verify-email"
