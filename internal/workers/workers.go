@@ -3,6 +3,7 @@ package workers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -12,10 +13,15 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-var (
+const (
 	emailVerificationQueue = "queue:verification:email"
 	cashoutQueue           = "queue:cashout"
 	depositQueue           = "queue:deposit"
+)
+
+var (
+	ErrGetTask = errors.New("error get task")
+	ErrDoTask  = errors.New("error do task")
 )
 
 type Workers struct {
@@ -47,122 +53,113 @@ func (w *Workers) Run(ctx context.Context, cfg Config) {
 	go w.DepositHandler(ctx, 1)
 }
 
+func (w *Workers) getTask(ctx context.Context, key string, scanObj interface{}) error {
+	task, err := w.rdb.LPop(ctx, key).Result()
+	if err != nil {
+		if err.Error() == "redis: nil" {
+			return ErrGetTask
+		}
+		logrus.Errorf("error getting task from redis by key %s", key)
+		return ErrGetTask
+	}
+	err = json.Unmarshal([]byte(task), scanObj)
+	if err != nil {
+		logrus.Errorf("error unmarshalling json task by key %s", key)
+		return ErrGetTask
+	}
+	return nil
+}
+
 func (w *Workers) DepositHandler(ctx context.Context, id int) {
 	ticker := time.NewTicker(5 * time.Second)
 LOOP:
 	for {
-	SELECT:
 		select {
 		case <-ctx.Done():
 			ticker.Stop()
 			break LOOP
 		case <-ticker.C:
 			for {
-				task, err := w.rdb.LPop(ctx, depositQueue).Result()
-				if err != nil {
-					if err.Error() == "redis: nil" {
-						break SELECT
-					}
-					logrus.Errorf("error worker deposit #%d getting task from rdb: %s", id, err)
-					break SELECT
-				}
-				if task == "" {
-					break SELECT
-				}
-				var depositTask domain.DepositTask
-				err = json.Unmarshal([]byte(task), &depositTask)
-				if err != nil {
-					logrus.Errorf("error worker cashout #%d unmarshaling json: %s",
-						id, err)
-					break SELECT
-				}
-				err = w.services.Deposit(ctx, depositTask.MachineId, depositTask.Email,
-					depositTask.AccId, depositTask.Amount, depositTask.NewMoney)
-				if err != nil {
-					logrus.Errorf("error deposit service deposit worker #%d: %s", id, err)
-					break SELECT
-				}
+				w.doDepositTask(ctx)
 			}
 		}
 	}
 	fmt.Printf("worker deposit #%d stopped", id)
 }
 
+func (w *Workers) doDepositTask(ctx context.Context) error {
+	var depositTask domain.DepositTask
+	err := w.getTask(ctx, depositQueue, &depositTask)
+	if err != nil {
+		return err
+	}
+	err = w.services.Deposit(ctx, depositTask.MachineId, depositTask.Email,
+		depositTask.AccId, depositTask.Amount, depositTask.NewMoney)
+	if err != nil {
+		logrus.Errorf("error deposit service deposit worker: %s", err)
+		return ErrDoTask
+	}
+	return nil
+}
+
 func (w *Workers) CashoutHandler(ctx context.Context, id int) {
 	ticker := time.NewTicker(5 * time.Second)
 LOOP:
 	for {
-	SELECT:
 		select {
 		case <-ctx.Done():
 			ticker.Stop()
 			break LOOP
 		case <-ticker.C:
 			for {
-				task, err := w.rdb.LPop(ctx, cashoutQueue).Result()
-				if err != nil {
-					if err.Error() == "redis: nil" {
-						break SELECT
-					}
-					logrus.Errorf("error worker cashout #%d getting task from rdb: %s", id, err)
-					break SELECT
-				}
-				var cashoutTask domain.CashoutTask
-				err = json.Unmarshal([]byte(task), &cashoutTask)
-				if err != nil {
-					logrus.Errorf("error worker cashout #%d unmarshaling json: %s",
-						id, err)
-					break SELECT
-				}
-				err = w.services.Cashout(ctx, cashoutTask.MachineId, cashoutTask.Email,
-					cashoutTask.AccId, cashoutTask.Amount, cashoutTask.NewMoney)
-				if err != nil {
-					logrus.Errorf("error cashout service cashout worker #%d: %s", id, err)
-					break SELECT
-				}
+				w.doCashoutTask(ctx)
 			}
 		}
 	}
-	fmt.Printf("worker cashout #%d stopped", id)
+	logrus.Printf("worker cashout #%d stopped", id)
+}
+
+func (w *Workers) doCashoutTask(ctx context.Context) error {
+	var cashoutTask domain.CashoutTask
+	err := w.getTask(ctx, cashoutQueue, &cashoutTask)
+	if err != nil {
+		return err
+	}
+	err = w.services.Cashout(ctx, cashoutTask.MachineId, cashoutTask.Email,
+		cashoutTask.AccId, cashoutTask.Amount, cashoutTask.NewMoney)
+	if err != nil {
+		logrus.Errorf("error cashout service cashout worker: %s", err)
+		return ErrDoTask
+	}
+	return nil
 }
 
 func (w *Workers) EmailVerificationSender(ctx context.Context, emailSenderId int) {
 	ticker := time.NewTicker(5 * time.Second)
 LOOP:
 	for {
-	SELECT:
 		select {
 		case <-ctx.Done():
 			ticker.Stop()
 			break LOOP
 		case <-ticker.C:
 			for {
-				task, err := w.rdb.LPop(ctx, emailVerificationQueue).Result()
-				if err != nil {
-					if err.Error() == "redis: nil" {
-						break SELECT
-					}
-					logrus.Errorf("error worker email verificatoin sender #%d getting task from rdb: %s",
-						emailSenderId, err)
-					break SELECT
-				}
-				if task == "" {
-					break SELECT
-				}
-				var emailVerificationTask domain.EmailVerificationTask
-				err = json.Unmarshal([]byte(task), &emailVerificationTask)
-				if err != nil {
-					logrus.Errorf("error worker email verification sender #%d unmarshaling json: %s",
-						emailSenderId, err)
-					break SELECT
-				}
-				err = w.services.SendEmailVerificationMessage(emailVerificationTask.Email)
-				if err != nil {
-					logrus.Errorf("error worker email verification sender #%d sending email verification message: %s", emailSenderId, err)
-					break SELECT
-				}
+				w.doEmailVerificationSenderTask(ctx)
 			}
 		}
 	}
-	fmt.Printf("worker email verification sender #%d stopped", emailSenderId)
+}
+
+func (w *Workers) doEmailVerificationSenderTask(ctx context.Context) error {
+	var emailVerificationTask domain.EmailVerificationTask
+	err := w.getTask(ctx, emailVerificationQueue, &emailVerificationTask)
+	if err != nil {
+		return err
+	}
+	err = w.services.SendEmailVerificationMessage(emailVerificationTask.Email)
+	if err != nil {
+		logrus.Errorf("error worker email verification sender sending email verification message: %s", err)
+		return ErrDoTask
+	}
+	return nil
 }
