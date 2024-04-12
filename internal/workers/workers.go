@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"time"
 
 	"github.com/IvanMeln1k/go-bank-app-worker/internal/domain"
@@ -53,6 +52,22 @@ func (w *Workers) Run(ctx context.Context, cfg Config) {
 	go w.DepositHandler(ctx, 1)
 }
 
+func (w *Workers) runLoop(ctx context.Context, ticker time.Ticker,
+	do func(ctx context.Context) error) {
+LOOP:
+	for {
+		select {
+		case <-ctx.Done():
+			ticker.Stop()
+			break LOOP
+		case <-ticker.C:
+			for {
+				do(ctx)
+			}
+		}
+	}
+}
+
 func (w *Workers) getTask(ctx context.Context, key string, scanObj interface{}) error {
 	task, err := w.rdb.LPop(ctx, key).Result()
 	if err != nil {
@@ -72,19 +87,8 @@ func (w *Workers) getTask(ctx context.Context, key string, scanObj interface{}) 
 
 func (w *Workers) DepositHandler(ctx context.Context, id int) {
 	ticker := time.NewTicker(5 * time.Second)
-LOOP:
-	for {
-		select {
-		case <-ctx.Done():
-			ticker.Stop()
-			break LOOP
-		case <-ticker.C:
-			for {
-				w.doDepositTask(ctx)
-			}
-		}
-	}
-	fmt.Printf("worker deposit #%d stopped", id)
+	w.runLoop(ctx, *ticker, w.doDepositTask)
+	logrus.Printf("worker deposit #%d stopped", id)
 }
 
 func (w *Workers) doDepositTask(ctx context.Context) error {
@@ -104,18 +108,7 @@ func (w *Workers) doDepositTask(ctx context.Context) error {
 
 func (w *Workers) CashoutHandler(ctx context.Context, id int) {
 	ticker := time.NewTicker(5 * time.Second)
-LOOP:
-	for {
-		select {
-		case <-ctx.Done():
-			ticker.Stop()
-			break LOOP
-		case <-ticker.C:
-			for {
-				w.doCashoutTask(ctx)
-			}
-		}
-	}
+	w.runLoop(ctx, *ticker, w.doCashoutTask)
 	logrus.Printf("worker cashout #%d stopped", id)
 }
 
@@ -136,18 +129,8 @@ func (w *Workers) doCashoutTask(ctx context.Context) error {
 
 func (w *Workers) EmailVerificationSender(ctx context.Context, emailSenderId int) {
 	ticker := time.NewTicker(5 * time.Second)
-LOOP:
-	for {
-		select {
-		case <-ctx.Done():
-			ticker.Stop()
-			break LOOP
-		case <-ticker.C:
-			for {
-				w.doEmailVerificationSenderTask(ctx)
-			}
-		}
-	}
+	w.runLoop(ctx, *ticker, w.doEmailVerificationSenderTask)
+	logrus.Printf("worker sender email verification stopped")
 }
 
 func (w *Workers) doEmailVerificationSenderTask(ctx context.Context) error {
